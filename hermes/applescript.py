@@ -8,16 +8,26 @@ class AppleScriptError(RuntimeError):
     pass
 
 
-def run_applescript(script: str) -> str:
+def run_applescript(script: str, timeout: float = 45) -> str:
     """Run an AppleScript string via osascript and return stdout, stripped.
 
-    Raises AppleScriptError with osascript's own error message on failure.
+    Raises AppleScriptError with osascript's own error message on failure,
+    or on timeout (most likely an unanswered macOS Automation permission
+    prompt sitting on screen).
     """
-    result = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AppleScriptError(
+            f"Timed out after {timeout}s waiting on osascript. Check your screen for "
+            "a macOS permission prompt (System Settings > Privacy & Security > "
+            "Automation) and approve it, then try again."
+        ) from exc
     if result.returncode != 0:
         raise AppleScriptError(result.stderr.strip() or "osascript failed")
     return result.stdout.strip()

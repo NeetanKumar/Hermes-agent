@@ -22,7 +22,15 @@ def main() -> None:
     if sys.platform != "darwin":
         print("Warning: Hermes' app automation only works on macOS.", file=sys.stderr)
 
-    agent = Agent(api_key=api_key)
+    def on_event(kind: str, detail: str) -> None:
+        if kind == "thinking":
+            print("... thinking", flush=True)
+        elif kind == "tool_call":
+            print(f"... running {detail}", flush=True)
+        elif kind == "tool_result":
+            print(f"... done: {detail[:200]}", flush=True)
+
+    agent = Agent(api_key=api_key, on_event=on_event)
     print("Hermes is ready. Ask about your Mail, Calendar, or Reminders (Ctrl+C to quit).")
 
     while True:

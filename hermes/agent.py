@@ -18,14 +18,18 @@ SYSTEM_PROMPT = (
 
 
 class Agent:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, on_event=None):
         self.client = Anthropic(api_key=api_key)
         self.messages: list[dict] = []
+        # on_event(kind: str, detail: str) is called for "thinking", "tool_call",
+        # and "tool_result" so a caller (e.g. the CLI) can show liveness.
+        self.on_event = on_event or (lambda kind, detail: None)
 
     def send(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
 
         while True:
+            self.on_event("thinking", "")
             response = self.client.messages.create(
                 model=MODEL,
                 max_tokens=1024,
@@ -42,7 +46,9 @@ class Agent:
             for block in response.content:
                 if block.type != "tool_use":
                     continue
+                self.on_event("tool_call", f"{block.name}({block.input})")
                 result = self._run_tool(block.name, block.input)
+                self.on_event("tool_result", f"{block.name} -> {result}")
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
