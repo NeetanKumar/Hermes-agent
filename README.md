@@ -47,6 +47,64 @@ permission to control Mail, Calendar, and Reminders under
 **System Settings > Privacy & Security > Automation**. Approve these prompts for
 Hermes to work.
 
+## Use from WhatsApp
+
+Hermes can also run as a WhatsApp bot using the official WhatsApp Cloud API,
+so you can message it from your phone instead of a terminal. This requires a
+Meta Developer app and a public URL for Meta to call (via a tunnel like
+ngrok, since Hermes still runs on your Mac and needs local AppleScript
+access).
+
+**1. Create the Meta app and test number**
+
+1. Go to [developers.facebook.com](https://developers.facebook.com/) →
+   create an app → add the **WhatsApp** product.
+2. Under WhatsApp > API Setup you get a temporary access token and a test
+   phone number (free, no business verification needed to start).
+3. Under API Setup, add your own phone number as an allowed **recipient**
+   (test numbers can only message pre-approved testers) and verify it via
+   the code WhatsApp sends you.
+
+**2. Configure Hermes**
+
+Add to `.env`:
+
+```
+WHATSAPP_TOKEN=<the access token from API Setup>
+WHATSAPP_PHONE_NUMBER_ID=<the phone number ID from API Setup>
+WHATSAPP_VERIFY_TOKEN=<any string you make up, e.g. hermes-verify-123>
+WHATSAPP_ALLOWED_NUMBERS=<your number in E.164 without +, e.g. 919876543210>
+```
+
+**3. Run the bridge and tunnel**
+
+```bash
+hermes-whatsapp          # starts the webhook server on :8000
+ngrok http 8000          # in a second terminal — gives you a public https URL
+```
+
+**4. Point the webhook at ngrok**
+
+In the Meta app dashboard, under WhatsApp > Configuration:
+
+- **Callback URL**: `https://<your-ngrok-domain>/webhook`
+- **Verify token**: the same value you set as `WHATSAPP_VERIFY_TOKEN`
+- Subscribe to the `messages` webhook field.
+
+Note the free ngrok URL changes every time you restart it — update the
+Callback URL in Meta's dashboard each time, or use a paid ngrok static
+domain to avoid that.
+
+**5. Message it**
+
+Text your Meta test number from your phone (the number you verified as a
+tester). Each WhatsApp sender gets their own Hermes conversation, backed by
+the same agent that powers the `hermes` CLI.
+
+The temporary access token from API Setup expires in 24 hours — for
+longer-lived use, generate a permanent token via a System User in Meta
+Business Settings.
+
 ## How it works
 
 Hermes uses Claude's tool-use API: your message and a set of tool definitions
