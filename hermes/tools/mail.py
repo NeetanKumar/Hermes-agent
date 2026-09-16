@@ -18,18 +18,19 @@ def list_messages(mailbox: str = "INBOX", limit: int = 10, unread_only: bool = F
     limit = max(1, min(int(limit), 50))
     mailbox_ref = _mailbox_ref(mailbox)
 
-    filter_clause = ""
+    conditions = []
     if unread_only:
-        filter_clause += " and read status is false"
+        conditions.append("read status is false")
     if sender_contains:
         sender_esc = escape_applescript_string(sender_contains)
-        filter_clause += f' and sender contains "{sender_esc}"'
+        conditions.append(f'sender contains "{sender_esc}"')
+    whose_clause = f" whose {' and '.join(conditions)}" if conditions else ""
 
     script = f'''
     set out to ""
     tell application "Mail"
         set theMailbox to {mailbox_ref}
-        set theMessages to (messages of theMailbox whose true{filter_clause})
+        set theMessages to (messages of theMailbox{whose_clause})
         set theCount to count of theMessages
         set upperBound to {limit}
         if theCount < upperBound then set upperBound to theCount
