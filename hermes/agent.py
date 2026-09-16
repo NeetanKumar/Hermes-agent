@@ -1,16 +1,29 @@
 """Claude tool-use loop that drives the desktop automation tools."""
 
 import json
+import threading
 
 from anthropic import Anthropic
 
 from .tools import DISPATCH, TOOL_SCHEMAS
 
 MODEL = "claude-sonnet-5"
+REQUEST_TIMEOUT = 60.0
+HEARTBEAT_INTERVAL = 5.0
+MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = (
     "You are Hermes, a local desktop assistant that can read and act on the user's "
     "Mail, Calendar, and Reminders apps via the tools provided. Be concise. "
+    "For time-bounded mail questions (e.g. 'in the last month'), always pass "
+    "since_days to mail_list_messages rather than relying on limit alone, and "
+    "raise limit generously (e.g. 100+) so results aren't silently truncated. "
+    "Classifying emails (e.g. 'is this a rejection?') from subject/sender alone can "
+    "be ambiguous — use mail_read_message on borderline cases before counting them, "
+    "and state any assumptions you made in the answer. "
+    "Never end a turn by announcing what you're about to check next ('I'll look into "
+    "X') without actually calling the tool in that same turn — either call it now or "
+    "give the complete final answer now. "
     "Confirm destructive or sending actions (like sending an email) are what the "
     "user asked for before or after doing them, but don't ask permission for read-only "
     "actions like listing messages or events."
@@ -19,25 +32,52 @@ SYSTEM_PROMPT = (
 
 class Agent:
     def __init__(self, api_key: str, on_event=None):
-        self.client = Anthropic(api_key=api_key)
+        # Explicit timeout: without one, a stalled connection can hang
+        # indefinitely with no error and no feedback.
+        self.client = Anthropic(api_key=api_key, timeout=REQUEST_TIMEOUT)
         self.messages: list[dict] = []
-        # on_event(kind: str, detail: str) is called for "thinking", "tool_call",
-        # and "tool_result" so a caller (e.g. the CLI) can show liveness.
+        # on_event(kind: str, detail: str) is called for "thinking", "heartbeat",
+        # "tool_call", and "tool_result" so a caller (e.g. the CLI) can show liveness.
         self.on_event = on_event or (lambda kind, detail: None)
+
+    def _create_with_heartbeat(self, **kwargs):
+        stop = threading.Event()
+
+        def beat():
+            elapsed = 0.0
+            while not stop.wait(HEARTBEAT_INTERVAL):
+                elapsed += HEARTBEAT_INTERVAL
+                self.on_event("heartbeat", f"{elapsed:.0f}s")
+
+        thread = threading.Thread(target=beat, daemon=True)
+        thread.start()
+        try:
+            return self.client.messages.create(**kwargs)
+        finally:
+            stop.set()
+            thread.join()
 
     def send(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
 
         while True:
             self.on_event("thinking", "")
-            response = self.client.messages.create(
+            response = self._create_with_heartbeat(
                 model=MODEL,
-                max_tokens=1024,
+                max_tokens=MAX_TOKENS,
                 system=SYSTEM_PROMPT,
                 tools=TOOL_SCHEMAS,
                 messages=self.messages,
             )
             self.messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason == "max_tokens":
+                self.on_event("warning", "response cut off at max_tokens")
+                text = "".join(block.text for block in response.content if block.type == "text")
+                return text or (
+                    "(I ran out of response budget mid-thought and didn't produce an "
+                    "answer. Try asking again, maybe more narrowly.)"
+                )
 
             if response.stop_reason != "tool_use":
                 return "".join(block.text for block in response.content if block.type == "text")

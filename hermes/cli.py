@@ -25,10 +25,14 @@ def main() -> None:
     def on_event(kind: str, detail: str) -> None:
         if kind == "thinking":
             print("... thinking", flush=True)
+        elif kind == "heartbeat":
+            print(f"... still waiting on Claude ({detail} elapsed)", flush=True)
         elif kind == "tool_call":
             print(f"... running {detail}", flush=True)
         elif kind == "tool_result":
             print(f"... done: {detail[:200]}", flush=True)
+        elif kind == "warning":
+            print(f"! {detail}", flush=True)
 
     agent = Agent(api_key=api_key, on_event=on_event)
     print("Hermes is ready. Ask about your Mail, Calendar, or Reminders (Ctrl+C to quit).")

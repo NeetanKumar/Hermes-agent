@@ -1,6 +1,8 @@
 """Mail.app automation tools."""
 
-from ..applescript import escape_applescript_string, run_applescript
+from datetime import datetime, timedelta
+
+from ..applescript import applescript_date_block, escape_applescript_string, run_applescript
 
 FIELD_SEP = "\x1f"
 RECORD_SEP = "\x1e"
@@ -13,20 +15,30 @@ def _mailbox_ref(mailbox: str) -> str:
 
 
 def list_messages(mailbox: str = "INBOX", limit: int = 10, unread_only: bool = False,
-                   sender_contains: str | None = None) -> list[dict]:
+                   sender_contains: str | None = None, subject_contains: str | None = None,
+                   since_days: int | None = None) -> list[dict]:
     """List recent messages in a mailbox, newest first."""
-    limit = max(1, min(int(limit), 50))
+    limit = max(1, min(int(limit), 200))
     mailbox_ref = _mailbox_ref(mailbox)
 
+    since_block = ""
     conditions = []
     if unread_only:
         conditions.append("read status is false")
     if sender_contains:
         sender_esc = escape_applescript_string(sender_contains)
         conditions.append(f'sender contains "{sender_esc}"')
+    if subject_contains:
+        subject_esc = escape_applescript_string(subject_contains)
+        conditions.append(f'subject contains "{subject_esc}"')
+    if since_days is not None:
+        cutoff = datetime.now() - timedelta(days=max(1, int(since_days)))
+        since_block = applescript_date_block("sinceDate", cutoff)
+        conditions.append("date received > sinceDate")
     whose_clause = f" whose {' and '.join(conditions)}" if conditions else ""
 
     script = f'''
+    {since_block}
     set out to ""
     tell application "Mail"
         set theMailbox to {mailbox_ref}
@@ -104,9 +116,11 @@ SCHEMAS = [
             "type": "object",
             "properties": {
                 "mailbox": {"type": "string", "description": "Mailbox name, e.g. 'INBOX'. Defaults to INBOX."},
-                "limit": {"type": "integer", "description": "Max number of messages to return (1-50)."},
+                "limit": {"type": "integer", "description": "Max number of messages to return (1-200). Use a high limit combined with since_days for date-range questions, since results are not otherwise guaranteed to cover the full range."},
                 "unread_only": {"type": "boolean", "description": "Only return unread messages."},
                 "sender_contains": {"type": "string", "description": "Filter messages whose sender contains this text."},
+                "subject_contains": {"type": "string", "description": "Filter messages whose subject contains this text."},
+                "since_days": {"type": "integer", "description": "Only return messages received within the last N days, e.g. 30 for 'last month'. Always set this for time-bounded questions instead of relying on limit alone."},
             },
         },
     },
