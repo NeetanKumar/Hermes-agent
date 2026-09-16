@@ -7,6 +7,19 @@ from ..applescript import applescript_date_block, escape_applescript_string, run
 FIELD_SEP = "\x1f"
 RECORD_SEP = "\x1e"
 
+# Subscribed/system calendars (holidays, birthdays, Siri suggestions) are
+# notoriously slow to query via AppleScript's `whose` filter due to heavy
+# recurrence expansion. Skip them by default; a user can still ask for one
+# explicitly via calendar_name.
+SLOW_CALENDAR_PATTERNS = ("holiday", "birthday", "siri suggestions")
+
+
+def _list_calendar_names() -> list[str]:
+    output = run_applescript('tell application "Calendar" to name of calendars')
+    if not output:
+        return []
+    return [name.strip() for name in output.split(",")]
+
 
 def list_events(days_ahead: int = 1, calendar_name: str | None = None) -> list[dict]:
     """List events starting from now through `days_ahead` days out."""
@@ -18,18 +31,33 @@ def list_events(days_ahead: int = 1, calendar_name: str | None = None) -> list[d
         cal_esc = escape_applescript_string(calendar_name)
         calendars_expr = f'{{calendar "{cal_esc}"}}'
     else:
-        calendars_expr = "calendars"
+        names = [
+            n for n in _list_calendar_names()
+            if not any(p in n.lower() for p in SLOW_CALENDAR_PATTERNS)
+        ]
+        if not names:
+            return []
+        calendars_expr = "{" + ", ".join(f'calendar "{escape_applescript_string(n)}"' for n in names) + "}"
 
+    # Subscribed calendars with heavy recurrence (Holidays, Birthdays, Siri
+    # Suggestions) make Calendar.app's `whose` queries pathologically slow —
+    # sometimes minutes per calendar. `with timeout ... end timeout` bounds
+    # each calendar's query so one slow calendar can't hang the whole call;
+    # a calendar that times out is just skipped.
     script = f'''
     {start_block}
     {end_block}
     set out to ""
     tell application "Calendar"
         repeat with cal in {calendars_expr}
-            set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
-            repeat with evt in theEvents
-                set out to out & (summary of evt) & "{FIELD_SEP}" & ((start date of evt) as string) & "{FIELD_SEP}" & ((end date of evt) as string) & "{FIELD_SEP}" & (name of cal) & "{RECORD_SEP}"
-            end repeat
+            try
+                with timeout of 8 seconds
+                    set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
+                    repeat with evt in theEvents
+                        set out to out & (summary of evt) & "{FIELD_SEP}" & ((start date of evt) as string) & "{FIELD_SEP}" & ((end date of evt) as string) & "{FIELD_SEP}" & (name of cal) & "{RECORD_SEP}"
+                    end repeat
+                end timeout
+            end try
         end repeat
     end tell
     return out
