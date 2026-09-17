@@ -7,11 +7,64 @@ from ..applescript import applescript_date_block, escape_applescript_string, run
 FIELD_SEP = "\x1f"
 RECORD_SEP = "\x1e"
 
+# IMAP accounts (Gmail in particular) nest their special mailboxes under the
+# account rather than exposing them as top-level mailboxes, and often use
+# provider-specific names ("Sent Mail" rather than "Sent"). A bare
+# `mailbox "Sent"` reference fails for these with a cryptic AppleScript
+# error (-1728), so common names are resolved against the account's real
+# mailbox list instead of guessed.
+MAILBOX_ALIASES = {
+    "sent": ["sent mail", "sent messages", "sent items", "sent"],
+    "drafts": ["drafts"],
+    "trash": ["trash", "deleted messages", "bin"],
+    "junk": ["junk", "spam", "junk e-mail"],
+}
+
+
+def _list_account_mailboxes() -> list[tuple[str, str]]:
+    """Return (account_name, mailbox_name) pairs for every account's mailboxes."""
+    script = '''
+    set out to ""
+    tell application "Mail"
+        repeat with acc in accounts
+            repeat with mb in mailboxes of acc
+                set out to out & (name of acc) & "\x1f" & (name of mb) & "\x1e"
+            end repeat
+        end repeat
+    end tell
+    return out
+    '''
+    output = run_applescript(script)
+    if not output:
+        return []
+    pairs = []
+    for record in output.split(RECORD_SEP):
+        if not record:
+            continue
+        account_name, mailbox_name = record.split(FIELD_SEP)
+        pairs.append((account_name, mailbox_name))
+    return pairs
+
 
 def _mailbox_ref(mailbox: str) -> str:
-    if mailbox.upper() == "INBOX":
+    normalized = mailbox.strip().lower()
+    if normalized == "inbox":
         return "inbox"
-    return f'mailbox "{escape_applescript_string(mailbox)}"'
+
+    pairs = _list_account_mailboxes()
+    candidates = [normalized] + MAILBOX_ALIASES.get(normalized, [])
+    for candidate in candidates:
+        for account_name, mailbox_name in pairs:
+            if mailbox_name.lower() == candidate:
+                # `mailbox "X" of account "Y"` fails with -1728 for IMAP-nested
+                # mailboxes (observed on Gmail); the `whose` filter form works.
+                return (
+                    f'first mailbox of account "{escape_applescript_string(account_name)}" '
+                    f'whose name is "{escape_applescript_string(mailbox_name)}"'
+                )
+
+    available = ", ".join(f"{acc}/{mb}" for acc, mb in pairs) or "(none found)"
+    raise ValueError(f'No mailbox matching "{mailbox}". Available mailboxes: {available}')
 
 
 def list_messages(mailbox: str = "INBOX", limit: int = 10, unread_only: bool = False,
@@ -108,7 +161,17 @@ def send_message(to: str, subject: str, body: str) -> dict:
     return {"status": "sent", "to": to, "subject": subject}
 
 
+def list_mailboxes() -> list[dict]:
+    """List every mailbox name available, grouped by account."""
+    return [{"account": acc, "mailbox": mb} for acc, mb in _list_account_mailboxes()]
+
+
 SCHEMAS = [
+    {
+        "name": "mail_list_mailboxes",
+        "description": "List all available mailbox names per account (e.g. to find the real name of Sent/Drafts/Trash on an account like Gmail, which nests and renames them).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
     {
         "name": "mail_list_messages",
         "description": "List recent messages in a Mail.app mailbox, newest first.",
@@ -152,6 +215,7 @@ SCHEMAS = [
 ]
 
 DISPATCH = {
+    "mail_list_mailboxes": list_mailboxes,
     "mail_list_messages": list_messages,
     "mail_read_message": read_message,
     "mail_send_message": send_message,
