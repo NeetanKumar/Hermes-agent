@@ -178,11 +178,11 @@ SCHEMAS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "mailbox": {"type": "string", "description": "Mailbox name, e.g. 'INBOX'. Defaults to INBOX."},
+                "mailbox": {"type": "string", "description": "Mailbox name. Defaults to INBOX, which only holds messages *received* — it never contains your own sent replies. For a full two-sided conversation/thread with someone, use 'All Mail' instead (present on Gmail accounts; holds both sent and received copies of every message). Call mail_list_mailboxes if unsure what's available on this account."},
                 "limit": {"type": "integer", "description": "Max number of messages to return (1-200). Use a high limit combined with since_days for date-range questions, since results are not otherwise guaranteed to cover the full range."},
                 "unread_only": {"type": "boolean", "description": "Only return unread messages."},
-                "sender_contains": {"type": "string", "description": "Filter messages whose sender contains this text."},
-                "subject_contains": {"type": "string", "description": "Filter messages whose subject contains this text."},
+                "sender_contains": {"type": "string", "description": "Filter messages whose sender contains this text. Note: this only matches messages *from* that person — your own sent replies to them have you as the sender, so this filter alone will miss half a conversation. To get the full thread, also run a second search with subject_contains set to the thread's subject (stripped of 'Re:'/'Fwd:' prefixes) against 'All Mail', which will surface your side too."},
+                "subject_contains": {"type": "string", "description": "Filter messages whose subject contains this text. Useful for pulling a full thread (both sent and received) by subject once you know it, since sender_contains alone can't do that."},
                 "since_days": {"type": "integer", "description": "Only return messages received within the last N days, e.g. 30 for 'last month'. Always set this for time-bounded questions instead of relying on limit alone."},
             },
         },
