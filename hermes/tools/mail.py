@@ -7,6 +7,38 @@ from ..applescript import applescript_date_block, escape_applescript_string, run
 FIELD_SEP = "\x1f"
 RECORD_SEP = "\x1e"
 
+
+def get_own_identities() -> list[dict]:
+    """Return {"name":, "email":} for each configured Mail.app account.
+
+    Without this, the agent has no way to tell its own sent messages apart
+    from a third party's in a thread — it can misread "Neetan Kumar" in a
+    conversation as someone other than the user.
+    """
+    script = '''
+    set out to ""
+    tell application "Mail"
+        repeat with acc in accounts
+            set addrs to email addresses of acc
+            repeat with i from 1 to count of addrs
+                set out to out & (full name of acc) & "\x1f" & (item i of addrs) & "\x1e"
+            end repeat
+        end repeat
+    end tell
+    return out
+    '''
+    output = run_applescript(script)
+    if not output:
+        return []
+    identities = []
+    for record in output.split(RECORD_SEP):
+        if not record:
+            continue
+        name, email = record.split(FIELD_SEP)
+        identities.append({"name": name, "email": email})
+    return identities
+
+
 # IMAP accounts (Gmail in particular) nest their special mailboxes under the
 # account rather than exposing them as top-level mailboxes, and often use
 # provider-specific names ("Sent Mail" rather than "Sent"). A bare
@@ -67,6 +99,43 @@ def _mailbox_ref(mailbox: str) -> str:
     raise ValueError(f'No mailbox matching "{mailbox}". Available mailboxes: {available}')
 
 
+def _draft_message_ids() -> set[str]:
+    """RFC822 Message-IDs of every message sitting in a "Drafts" mailbox.
+
+    Gmail mirrors drafts into "All Mail" alongside genuinely sent/received
+    mail, with no per-message property distinguishing them — so a thread
+    search against "All Mail" can silently include an unsent draft as if it
+    were a real message. Cross-referencing against the real Drafts mailboxes
+    is the only reliable way to catch that.
+
+    Mail.app's own `id` property is per-mailbox-copy — the same logical
+    message has a *different* `id` in Drafts than it does in All Mail — so
+    matching on `id` silently fails to catch anything. `message id` (the
+    RFC822 Message-ID header) is stable across mailbox copies and is what
+    has to be used here instead.
+    """
+    script = '''
+    set out to ""
+    tell application "Mail"
+        repeat with acc in accounts
+            try
+                set draftsMailboxes to (every mailbox of acc whose name is "Drafts")
+                repeat with mb in draftsMailboxes
+                    repeat with msg in (messages of mb)
+                        set out to out & (message id of msg) & "\x1e"
+                    end repeat
+                end repeat
+            end try
+        end repeat
+    end tell
+    return out
+    '''
+    output = run_applescript(script)
+    if not output:
+        return set()
+    return {rec for rec in output.split(RECORD_SEP) if rec}
+
+
 def list_messages(mailbox: str = "INBOX", limit: int = 10, unread_only: bool = False,
                    sender_contains: str | None = None, subject_contains: str | None = None,
                    since_days: int | None = None) -> list[dict]:
@@ -101,7 +170,7 @@ def list_messages(mailbox: str = "INBOX", limit: int = 10, unread_only: bool = F
         if theCount < upperBound then set upperBound to theCount
         repeat with i from 1 to upperBound
             set msg to item i of theMessages
-            set out to out & (id of msg as string) & "{FIELD_SEP}" & (subject of msg) & "{FIELD_SEP}" & (sender of msg) & "{FIELD_SEP}" & ((date received of msg) as string) & "{FIELD_SEP}" & (read status of msg as string) & "{RECORD_SEP}"
+            set out to out & (id of msg as string) & "{FIELD_SEP}" & (subject of msg) & "{FIELD_SEP}" & (sender of msg) & "{FIELD_SEP}" & ((date received of msg) as string) & "{FIELD_SEP}" & (read status of msg as string) & "{FIELD_SEP}" & (message id of msg) & "{RECORD_SEP}"
         end repeat
     end tell
     return out
@@ -109,17 +178,19 @@ def list_messages(mailbox: str = "INBOX", limit: int = 10, unread_only: bool = F
     output = run_applescript(script)
     if not output:
         return []
+    draft_message_ids = _draft_message_ids()
     messages = []
     for record in output.split(RECORD_SEP):
         if not record:
             continue
-        msg_id, subject, sender, date_received, read_status = record.split(FIELD_SEP)
+        msg_id, subject, sender, date_received, read_status, rfc_message_id = record.split(FIELD_SEP)
         messages.append({
             "id": msg_id,
             "subject": subject,
             "sender": sender,
             "date_received": date_received,
             "unread": read_status == "false",
+            "is_draft": rfc_message_id in draft_message_ids,
         })
     return messages
 
@@ -133,14 +204,19 @@ def read_message(message_id: str, mailbox: str = "INBOX") -> dict:
         set theMessages to (messages of theMailbox whose id is {int(message_id)})
         if (count of theMessages) is 0 then return "NOT_FOUND"
         set msg to item 1 of theMessages
-        return (subject of msg) & "{FIELD_SEP}" & (sender of msg) & "{FIELD_SEP}" & (content of msg)
+        return (subject of msg) & "{FIELD_SEP}" & (sender of msg) & "{FIELD_SEP}" & (message id of msg) & "{FIELD_SEP}" & (content of msg)
     end tell
     '''
     output = run_applescript(script)
     if output == "NOT_FOUND":
         return {"error": f"No message with id {message_id} in mailbox {mailbox}"}
-    subject, sender, content = output.split(FIELD_SEP, 2)
-    return {"subject": subject, "sender": sender, "content": content}
+    subject, sender, rfc_message_id, content = output.split(FIELD_SEP, 3)
+    return {
+        "subject": subject,
+        "sender": sender,
+        "content": content,
+        "is_draft": rfc_message_id in _draft_message_ids(),
+    }
 
 
 def send_message(to: str, subject: str, body: str) -> dict:
@@ -174,7 +250,7 @@ SCHEMAS = [
     },
     {
         "name": "mail_list_messages",
-        "description": "List recent messages in a Mail.app mailbox, newest first.",
+        "description": "List recent messages in a Mail.app mailbox, newest first. Each result includes is_draft: an unsent draft (e.g. searched via 'All Mail', which mirrors drafts alongside real mail) is NOT a message that was actually sent or received — never count it as a reply or as evidence the user already responded.",
         "input_schema": {
             "type": "object",
             "properties": {
