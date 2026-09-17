@@ -47,6 +47,40 @@ permission to control Mail, Calendar, and Reminders under
 **System Settings > Privacy & Security > Automation**. Approve these prompts for
 Hermes to work.
 
+## Use from Telegram
+
+The easiest way to talk to Hermes from your phone: no public webhook, no
+tunnel, no business app review — just a bot token.
+
+**1. Create the bot**
+
+Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`,
+follow the prompts. It gives you a token like `123456:ABC-DEF...`.
+
+**2. Configure Hermes**
+
+Add to `.env`:
+
+```
+TELEGRAM_BOT_TOKEN=<the token from BotFather>
+```
+
+**3. Run it**
+
+```bash
+hermes-telegram
+```
+
+That's it — message your bot on Telegram and it replies. It works by
+long-polling Telegram for new messages (no inbound connection needed), so
+there's nothing else to configure. Each Telegram chat gets its own Hermes
+conversation, backed by the same agent that powers the `hermes` CLI.
+
+By default anyone who finds your bot's username can message it. To restrict
+it to yourself, message your bot once, then check
+`https://api.telegram.org/bot<token>/getUpdates` for your `chat.id`, and set
+`TELEGRAM_ALLOWED_CHAT_IDS=<that id>` in `.env`.
+
 ## Use from WhatsApp
 
 Hermes can also run as a WhatsApp bot using the official WhatsApp Cloud API,

@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 hermes = "hermes.cli:main"
 hermes-whatsapp = "hermes.whatsapp.server:main"
+hermes-telegram = "hermes.telegram.bot:main"
 
 [tool.setuptools.packages.find]
 include = ["hermes*"]
