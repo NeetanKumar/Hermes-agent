@@ -145,3 +145,26 @@ Hermes uses Claude's tool-use API: your message and a set of tool definitions
 (one per app action) are sent to Claude, which decides which tool(s) to call.
 Hermes runs those locally via AppleScript (`osascript`) and feeds the results
 back to Claude until it has a final reply. See [PLAN.md](PLAN.md) for the design.
+
+## Note: not the same project as "Hermes Agent" by Nous Research
+
+There's a separate, unrelated open-source project also called "Hermes Agent"
+(`github.com/NousResearch/hermes-agent`) — a much larger general-purpose
+self-hosted agent platform (persistent memory, 40+ skills, 5 chat platforms,
+cloud/Docker execution backends). Pure name collision, not related to this
+repo. Its terminal setup, kept here for reference since it's easy to miss in
+their README:
+
+```bash
+# Install (macOS/Linux/WSL2)
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+
+# Reload shell, then run
+source ~/.zshrc
+hermes
+```
+
+Other commands: `hermes model` (choose LLM provider), `hermes tools`
+(configure enabled tools), `hermes setup` (full setup wizard), `hermes
+gateway` (start the messaging gateway for Telegram/Discord/Slack/WhatsApp/
+Signal), `hermes update`, `hermes doctor`.
